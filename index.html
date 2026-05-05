@@ -64,6 +64,11 @@
           <div><label for="speechRate">Speech rate</label><input id="speechRate" type="number" min="0.5" max="2" step="0.1" value="1" /></div>
         </div>
 
+        <div class="row">
+          <div><label for="voiceDelay">Voice delay (seconds)</label><input id="voiceDelay" type="number" min="0" max="10" step="0.5" value="1" /></div>
+          <div></div>
+        </div>
+
         <div class="status">
           <div>Last poll: <span id="lastPoll">never</span></div>
           <div>Last alert: <span id="lastAlert">none</span></div>
@@ -99,6 +104,7 @@
       area:document.getElementById('area'),
       voiceSelect:document.getElementById('voiceSelect'),
       speechRate:document.getElementById('speechRate'),
+      voiceDelay:document.getElementById('voiceDelay'),
       lastPoll:document.getElementById('lastPoll'),
       lastAlert:document.getElementById('lastAlert'),
       alertSelect:document.getElementById('alertSelect'),
@@ -198,8 +204,7 @@
       u.rate = Math.max(0.5, Math.min(2, parseFloat(els.speechRate.value) || 1));
       u.pitch = 0.9;
       u.volume = 1;
-      speechSynthesis.speak(u);
-      await new Promise(resolve => { u.onend = resolve; u.onerror = resolve; });
+      return new Promise(resolve => { u.onend = resolve; u.onerror = resolve; speechSynthesis.speak(u); });
     }
 
     function renderAlerts(alerts){
@@ -238,6 +243,7 @@
       } else {
         await threeBeeps();
       }
+      await new Promise(r => setTimeout(r, parseFloat(els.voiceDelay.value) * 1000));
       await speak(phrase);
     }
 
@@ -299,6 +305,7 @@
       } else {
         await threeBeeps();
       }
+      await new Promise(r => setTimeout(r, parseFloat(els.voiceDelay.value) * 1000));
       await speak(phraseFor(type));
     }
 

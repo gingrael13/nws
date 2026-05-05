@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NWS Warning Relay</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1220; --panel:#111a2e; --panel2:#0f1730; --text:#e8eefc; --muted:#9fb0d0; --accent:#4ea1ff; --good:#31d0aa; --bad:#ff6b6b; --border:#223152; }
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:linear-gradient(180deg,#08111f,#0b1220); color:var(--text); }
+    .wrap { max-width:1100px; margin:0 auto; padding:24px; }
+    h1 { margin:0 0 8px; font-size:2rem; }
+    p { color:var(--muted); line-height:1.5; }
+    .grid { display:grid; gap:16px; grid-template-columns:1.2fr 0.8fr; align-items:start; }
+    .card { background:rgba(17,26,46,.9); border:1px solid var(--border); border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.2); }
+    .controls { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+    button { border:0; border-radius:12px; padding:12px 14px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
+    button.secondary { background:#263451; }
+    button.danger { background:#c94b4b; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    label { display:block; margin:10px 0 6px; color:var(--muted); font-size:.92rem; }
+    input, select { width:100%; box-sizing:border-box; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:11px 12px; outline:none; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .status { display:grid; gap:8px; margin-top:10px; font-size:.95rem; color:var(--muted); }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; background:#17243e; border:1px solid var(--border); color:var(--text); width:fit-content; }
+    .dot { width:10px; height:10px; border-radius:50%; background:var(--bad); box-shadow:0 0 10px currentColor; }
+    .dot.on { background:var(--good); }
+    .alerts { display:grid; gap:10px; margin-top:12px; max-height:520px; overflow:auto; }
+    .alert { border:1px solid var(--border); border-radius:14px; padding:12px; background:rgba(15,23,48,.9); }
+    .alert h3 { margin:0 0 6px; font-size:1rem; }
+    .meta { color:var(--muted); font-size:.9rem; line-height:1.4; }
+    .small { font-size:.88rem; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>NWS Warning Relay</h1>
+    <p>Monitors National Weather Service active alerts and announces new tornado, severe thunderstorm, and flash flood warnings with sound and speech.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="pill"><span id="dot" class="dot"></span><span id="runState">Stopped</span></div>
+
+        <div class="controls">
+          <button id="startBtn">Start monitoring</button>
+          <button id="stopBtn" class="secondary" disabled>Stop</button>
+        </div>
+
+        <div class="controls">
+          <button id="testTornadoBtn" class="danger">Test Tornado</button>
+          <button id="testPdsBtn" class="danger">Test PDS Tornado</button>
+          <button id="testEmergencyBtn" class="danger">Test Tornado Emergency</button>
+          <button id="testSevereBtn" class="danger">Test Severe Thunderstorm</button>
+          <button id="testFloodBtn" class="danger">Test Flash Flood</button>
+          <button id="testTornadoWatchBtn" class="danger">Test Tornado Watch</button>
+          <button id="testSevereWatchBtn" class="danger">Test Severe Watch</button>
+        </div>
+
+        <div class="row">
+          <div><label for="pollSeconds">Poll interval (seconds)</label><input id="pollSeconds" type="number" min="2" value="2" /></div>
+          <div><label for="area">Optional state filter</label><input id="area" type="text" placeholder="Leave blank for all U.S." maxlength="2" /></div>
+        </div>
+
+        <div class="row">
+          <div><label for="voiceSelect">Voice</label><select id="voiceSelect"></select></div>
+          <div><label for="speechRate">Speech rate</label><input id="speechRate" type="number" min="0.5" max="2" step="0.1" value="1" /></div>
+        </div>
+
+        <div class="status">
+          <div>Last poll: <span id="lastPoll">never</span></div>
+          <div>Last alert: <span id="lastAlert">none</span></div>
+          <div>Tracked warnings: Tornado, Severe Thunderstorm, Flash Flood, PDS Tornado Warning, Tornado Emergency, Tornado Watch, Severe Thunderstorm Watch</div>
+        </div>
+
+        <label for="alertSelect">Alert log</label>
+        <select id="alertSelect" size="10" style="width:100%; min-height:280px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:12px; padding:10px;"></select>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Active alerts</h2>
+        <div class="small">Newest matching alerts appear here.</div>
+        <div id="alerts" class="alerts"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'https://api.weather.gov/alerts/active';
+    const TRACKED = new Set(['tornado warning','severe thunderstorm warning','flash flood warning','pds tornado warning','tornado emergency','tornado watch','severe thunderstorm watch']);
+    const els = {
+      startBtn:document.getElementById('startBtn'),
+      stopBtn:document.getElementById('stopBtn'),
+      testTornadoBtn:document.getElementById('testTornadoBtn'),
+      testPdsBtn:document.getElementById('testPdsBtn'),
+      testEmergencyBtn:document.getElementById('testEmergencyBtn'),
+      testSevereBtn:document.getElementById('testSevereBtn'),
+      testFloodBtn:document.getElementById('testFloodBtn'),
+      testTornadoWatchBtn:document.getElementById('testTornadoWatchBtn'),
+      testSevereWatchBtn:document.getElementById('testSevereWatchBtn'),
+      pollSeconds:document.getElementById('pollSeconds'),
+      area:document.getElementById('area'),
+      voiceSelect:document.getElementById('voiceSelect'),
+      speechRate:document.getElementById('speechRate'),
+      lastPoll:document.getElementById('lastPoll'),
+      lastAlert:document.getElementById('lastAlert'),
+      alertSelect:document.getElementById('alertSelect'),
+      alerts:document.getElementById('alerts'),
+      runState:document.getElementById('runState'),
+      dot:document.getElementById('dot')
+    };
+
+    let timer = null, seenIds = new Set(), voices = [], audioCtx = null;
+    const AUDIO = { pds: 'tornado.mp3.mov' };
+
+    function log(msg){ const t = new Date().toLocaleTimeString(); const opt = document.createElement('option'); opt.textContent = `[${t}] ${msg}`; els.alertSelect.prepend(opt); }
+    function setRunning(r){ els.startBtn.disabled = r; els.stopBtn.disabled = !r; els.runState.textContent = r ? 'Monitoring' : 'Stopped'; els.dot.className = 'dot' + (r ? ' on' : ''); }
+    function normalizeEventName(name){ return String(name || '').trim().toLowerCase(); }
+
+    function phraseFor(type){
+      const n = normalizeEventName(type);
+      if (n==='tornado warning') return 'A new tornado warning has been issued.';
+      if (n==='pds tornado warning') return 'A new PDS tornado warning has been issued.';
+      if (n==='tornado emergency') return 'A new tornado emergency has been issued.';
+      if (n==='severe thunderstorm warning') return 'A new severe thunderstorm warning has been issued.';
+      if (n==='flash flood warning') return 'A new flash flood warning has been issued.';
+      if (n==='tornado watch') return 'A new tornado watch has been issued.';
+      if (n==='severe thunderstorm watch') return 'A new severe thunderstorm watch has been issued.';
+      return `A new ${type} has been issued.`;
+    }
+
+    function pickVoice(){
+      const chosen = els.voiceSelect.value;
+      return voices.find(v=>v.name===chosen) || voices.find(v=>/male|david|alex|daniel|mark|tom|english/i.test(v.name)) || voices[0] || null;
+    }
+
+    function loadVoices(){
+      voices = speechSynthesis.getVoices();
+      els.voiceSelect.innerHTML = '';
+      voices.forEach(v=>{
+        const opt = document.createElement('option');
+        opt.value = v.name;
+        opt.textContent = `${v.name} (${v.lang})`;
+        els.voiceSelect.appendChild(opt);
+      });
+      const best = pickVoice();
+      if (best) els.voiceSelect.value = best.name;
+    }
+
+    function ensureAudio(){
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') return audioCtx.resume();
+      return Promise.resolve();
+    }
+
+    async function beep(duration=160,freq=880,volume=0.08){
+      await ensureAudio();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'square';
+      o.frequency.value = freq;
+      g.gain.value = volume;
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      o.start();
+      await new Promise(r=>setTimeout(r,duration));
+      o.stop();
+    }
+
+    async function threeBeeps(){
+      for (let i=0;i<3;i++){
+        await beep();
+        await new Promise(r=>setTimeout(r,120));
+      }
+    }
+
+    async function shortSiren(){
+      await ensureAudio();
+      const seq = [660, 880, 660, 880, 660];
+      for (const f of seq){
+        await beep(180, f, 0.09);
+        await new Promise(r=>setTimeout(r,90));
+      }
+    }
+
+    async function calmTone(){
+      await ensureAudio();
+      const seq = [440, 392, 440];
+      for (const f of seq){
+        await beep(260, f, 0.05);
+        await new Promise(r=>setTimeout(r,140));
+      }
+    }
+
+    async function speak(text){
+      await ensureAudio();
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const v = pickVoice();
+      if (v) u.voice = v;
+      u.rate = Math.max(0.5, Math.min(2, parseFloat(els.speechRate.value) || 1));
+      u.pitch = 0.9;
+      u.volume = 1;
+      speechSynthesis.speak(u);
+      await new Promise(resolve => { u.onend = resolve; u.onerror = resolve; });
+    }
+
+    function renderAlerts(alerts){
+      els.alerts.innerHTML = '';
+      alerts.slice(0,30).forEach(a=>{
+        const div = document.createElement('div');
+        div.className = 'alert';
+        const details = [
+          ['Event', a.event], ['Headline', a.headline || ''], ['Area', a.areaDesc || 'Unknown'], ['Expires', a.expires || 'Unknown'], ['Sent', a.sent || 'Unknown'], ['ID', a.id || '']
+        ].map(([k,v]) => `${k}: ${v}`).join(' | ');
+        div.innerHTML = `<h3>${a.event}</h3><div class="meta">${details}</div>`;
+        els.alerts.appendChild(div);
+      });
+      els.alertSelect.innerHTML = '';
+      alerts.forEach(a=>{
+        const opt = document.createElement('option');
+        opt.textContent = `${a.event} | ${a.areaDesc || 'Unknown'} | ${a.expires || 'Unknown'} | ${a.headline || ''}`;
+        opt.title = JSON.stringify(a, null, 2);
+        els.alertSelect.appendChild(opt);
+      });
+    }
+
+    async function announceAlert(alert){
+      const phrase = phraseFor(alert.event);
+      els.lastAlert.textContent = `${alert.event} — ${alert.areaDesc || 'unknown area'}`;
+      log(`New alert: ${alert.event} (${alert.areaDesc || 'unknown area'})`);
+      const e = normalizeEventName(alert.event);
+      if (e==='tornado warning') {
+        try { const audio = new Audio('./tornado.mp3.mov'); audio.volume = 1; await audio.play(); } catch(e) { await threeBeeps(); }
+      } else if (e==='pds tornado warning') {
+        try { const audio = new Audio('./' + AUDIO.pds); audio.volume = 1; await audio.play(); } catch(e) { await threeBeeps(); }
+      } else if (e==='tornado emergency') {
+        await shortSiren();
+      } else if (e==='tornado watch' || e==='severe thunderstorm watch') {
+        await calmTone();
+      } else {
+        await threeBeeps();
+      }
+      await speak(phrase);
+    }
+
+    async function fetchAlerts(){
+      const url = new URL(API_BASE);
+      const area = els.area.value.trim().toUpperCase();
+      if (area && area.length===2) url.searchParams.set('area', area);
+      const res = await fetch(url.toString(), { headers: { 'Accept':'application/geo+json' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const features = Array.isArray(data.features) ? data.features : [];
+      els.lastPoll.textContent = new Date().toLocaleTimeString();
+      const matching = features.map(f=>({
+        id:f.id,
+        event:f.properties?.event || '',
+        areaDesc:f.properties?.areaDesc || '',
+        headline:f.properties?.headline || '',
+        sent:f.properties?.sent || '',
+        expires:f.properties?.expires || ''
+      })).filter(a=>TRACKED.has(normalizeEventName(a.event)));
+      renderAlerts(matching);
+      for (const a of matching){
+        if (!seenIds.has(a.id)){
+          seenIds.add(a.id);
+          await announceAlert(a);
+        }
+      }
+    }
+
+    async function start(){
+      await ensureAudio();
+      setRunning(true);
+      log('Monitoring started.');
+      await fetchAlerts().catch(err=>log(`Fetch failed: ${err.message}`));
+      timer = setInterval(()=>{
+        fetchAlerts().catch(err=>log(`Fetch failed: ${err.message}`));
+      }, Math.max(2, parseInt(els.pollSeconds.value,10) || 2) * 1000);
+    }
+
+    function stop(){
+      if (timer) clearInterval(timer);
+      timer = null;
+      setRunning(false);
+      log('Monitoring stopped.');
+    }
+
+    async function testOne(type){
+      await ensureAudio();
+      log(`Test alert triggered: ${type}`);
+      const e = normalizeEventName(type);
+      if (e==='tornado warning') {
+        try { const audio = new Audio('./tornado.mp3.mov'); audio.volume = 1; await audio.play(); } catch(e) { await threeBeeps(); }
+      } else if (e==='pds tornado warning') {
+        try { const audio = new Audio('./' + AUDIO.pds); audio.volume = 1; await audio.play(); } catch(e) { await threeBeeps(); }
+      } else if (e==='tornado emergency') {
+        await shortSiren();
+      } else if (e==='tornado watch' || e==='severe thunderstorm watch') {
+        await calmTone();
+      } else {
+        await threeBeeps();
+      }
+      await speak(phraseFor(type));
+    }
+
+    els.startBtn.addEventListener('click', ()=>start());
+    els.stopBtn.addEventListener('click', stop);
+    els.testTornadoBtn.addEventListener('click', ()=>testOne('Tornado Warning'));
+    els.testPdsBtn.addEventListener('click', ()=>testOne('PDS Tornado Warning'));
+    els.testEmergencyBtn.addEventListener('click', ()=>testOne('Tornado Emergency'));
+    els.testSevereBtn.addEventListener('click', ()=>testOne('Severe Thunderstorm Warning'));
+    els.testFloodBtn.addEventListener('click', ()=>testOne('Flash Flood Warning'));
+    els.testTornadoWatchBtn.addEventListener('click', ()=>testOne('Tornado Watch'));
+    els.testSevereWatchBtn.addEventListener('click', ()=>testOne('Severe Thunderstorm Watch'));
+
+    speechSynthesis.onvoiceschanged = loadVoices;
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', loadVoices);
+    } else {
+      loadVoices();
+    }
+  </script>
+</body>
+</html>
